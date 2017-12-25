@@ -1,0 +1,414 @@
+---
+title: "Titanic"
+author: "Tomas Bartos"
+date: "13 prosince 2017"
+output: 
+  html_document:
+    fig_height: 4.5
+    fig_width: 7
+    number_sections: yes
+    toc: yes
+---
+
+# Introduction
+
+This is my first Kaggle script. 
+
+
+## Loading libraries:
+
+```{r, message=FALSE, warning = FALSE}
+# Load packages
+library('readr') # data input
+library('VIM') # data input
+library('ggplot2') # visualization
+library('ggthemes') # visualization
+library('scales') # visualization
+library('PASWR2') # visualization
+library('dplyr') # data manipulation
+library('purrr') # data manipulation
+library('mice') # imputation
+library('randomForest') # classification algorithm
+```
+
+## Loading data:
+
+```{r, message=FALSE, warning=FALSE}
+# load data
+train <- read_csv('train.csv')
+test  <- read_csv('test.csv')
+
+# combine training + test data
+titanic_original  <- full_join(train, test) 
+titanic  <- full_join(train, test)
+
+# factor variables
+titanic <- titanic %>% mutate(
+  Survived = factor(Survived),
+  Pclass = factor(Pclass),
+  Embarked = factor(Embarked),
+  Sex = factor(Sex)
+)
+
+```
+
+Using readr package enable to load data as tibble dataframe, which is  enhanced version of the standard data frame.
+Using full_join from dplyr package returns all data from both datasets combining the data from the matched keys
+
+Now we're working with 1309 observations of these variables:
+
+Variable Name | Description
+--------------|-------------------------------------------------
+Survived      | Survived (1) or died (0)
+Pclass        | Passenger's class (1,2,3)
+Name          | Passenger's name
+Sex           | Passenger's sex - male (0), female (1)
+Age           | Passenger's age
+SibSp         | Number of siblings/spouses aboard
+Parch         | Number of parents/children aboard
+Ticket        | Ticket number
+Fare          | Fare
+Cabin         | Cabin
+Embarked      | Port of embarkation (S = Southampton, C = Cherbourg, Q = Queenstown)
+
+
+## Data overview:
+```{r, message=FALSE, warning=FALSE}
+
+glimpse(titanic)
+summary(titanic)
+
+```
+
+## Missing data:
+
+Map functions transform their input by applying a function to each element and returning a list or vector the same length as the input.
+
+Using aggr from VIM package plot missing values in each variable and the amount of missing values in certain combinations of variables. 
+
+```{r, message=FALSE, warning=FALSE}
+
+map_int(titanic, ~sum(is.na(.)))
+
+aggr(titanic, col=(c("lightgray", "firebrick")), prop = FALSE, 
+     combined = TRUE, numbers = TRUE, sortVars = TRUE, sortCombs = TRUE)
+
+
+
+```
+
+
+# Exploration, Visualisation and Imputation
+
+Data exploration is the first step in data analysis and typically involves summarizing the main characteristics of a dataset.
+
+## Variables
+
+### Gender
+
+```{r, message=FALSE, warning=FALSE}
+
+gender_bar <- ggplot(titanic, aes(x=Sex)) +
+  geom_bar(fill=c("firebrick", "dodgerblue4")) +
+  ggtitle("Gender counts\nall passengers")
+gender_prop <- ggplot(data = titanic[!is.na(titanic$Survived),],  aes(x=Sex,  fill=Survived)) +
+  geom_bar(position="fill") +
+  scale_fill_manual(values= c("grey25", "darkolivegreen3")) +
+  ggtitle("Survival Rate by Gender") +
+  ylab("Survival Rate") +
+  geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "white", lty = 2, lwd = 1) +
+  annotate("text", x = "male", y = 0.5, label = "Overall\nSurvival\nRatio", colour='white')
+multiplot(gender_bar, gender_prop, layout=matrix(c(1,1,2,2,2),nrow = 1, ncol = 5, byrow=TRUE)) 
+
+```
+
+### P Class
+
+```{r, message=FALSE, warning=FALSE}
+
+pclass_bar <- ggplot(titanic, aes(x=Pclass)) +
+  geom_bar(fill=c("gold", "darkgray", "chocolate")) +
+  ggtitle("Passenger's class counts\nall passengers")
+pclass_prop <- ggplot(data = titanic[!is.na(titanic$Survived),],  aes(x=Pclass,  fill=Survived)) +
+  geom_bar(position="fill") +
+  scale_fill_manual(values= c("grey25", "darkolivegreen3")) +
+  ggtitle("Survival Rate by Passenger's class") +
+  ylab("Survival Rate") +
+  geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "white", lty = 2, lwd = 1) + 
+  annotate("text", x = 3, y = 0.5, label = "Overall\nSurvival\nRatio", colour='white')
+multiplot(pclass_bar, pclass_prop, layout=matrix(c(1,1,2,2,2),nrow = 1, ncol = 5, byrow=TRUE)) 
+
+```
+
+
+### Fare
+
+```{r, message=FALSE, warning=FALSE}
+fare_dens <- ggplot(titanic, aes(Fare)) +                       
+  geom_density(fill="dodgerblue4", alpha=0.5) +
+  geom_vline(aes(xintercept=median(Fare, na.rm=TRUE)), colour='black', lty=2, lwd=1) +
+  annotate("text", x = 40, y = 0.04, label = "Median", colour='black') +
+  geom_vline(aes(xintercept=mean(Fare, na.rm=TRUE)), colour='firebrick', lty=2, lwd=1) +
+  annotate("text", x = 55, y = 0.03, label = "Mean", colour='firebrick') +
+  ggtitle("Fare distribution - all known passengers")
+
+fare_hist <- ggplot(data = titanic[!is.na(titanic$Survived),],  aes(x = Fare,  fill = Survived)) +
+  geom_histogram(position = "fill", binwidth = 30) +
+  scale_fill_manual(values = c("grey25", "darkolivegreen3")) +
+  ggtitle("Survival Rate by Fare") +
+  ylab("Survival Rate") +
+  theme(legend.position = "bottom") +
+  geom_vline(aes(xintercept = median(Fare, na.rm=TRUE)), colour = 'black', lty = 2, lwd = 1) +
+  annotate("text", x = 60, y = 0.1, label = "Median Fare", colour='black') +
+  geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "white", lty = 2, lwd = 1) +
+  annotate("text", x = 200, y = 0.45, label = "Overall Survival Ratio", colour='white')
+multiplot(fare_dens, fare_hist, layout=matrix(c(1,2,2),nrow = 3, ncol = 1, byrow=TRUE)) 
+```
+
+Ony 1 Fare values is missing. Let's see this passenger:
+
+```{r, message=FALSE, warning=FALSE}
+# Extract the passengers data which contains the missing Fare data
+data.frame(filter(titanic, is.na(Fare)))
+```
+
+We can assume, that this passenger paid typical fare for third class ticket and for embarkation in Southampton.
+
+```{r, message=FALSE, warning=FALSE}
+# Imputation the missing Fare value
+titanic$Fare[which(is.na(titanic$Fare))] <- titanic %>% filter(Pclass==3, Embarked=="S") %>% select(Fare) %>% unlist %>% median(na.rm=TRUE)
+```
+
+### Embarked
+
+```{r, message=FALSE, warning=FALSE}
+
+embarked_bar <- ggplot(data = titanic[!is.na(titanic$Embarked),], aes(x=Embarked, fill = Embarked)) +
+  geom_bar() +
+  scale_fill_brewer(labels=c("Cherbourg", "Queenstown", "Southampton")) +
+  theme(legend.position = c(0.3, 0.7)) +
+  ggtitle("Embarked counts\nall known passengers")
+embarked_prop <- ggplot(data = titanic[!is.na(titanic$Survived) & !is.na(titanic$Embarked),],  aes(x=Embarked,  fill=Survived)) +
+  geom_bar(position="fill") +
+  scale_fill_manual(values= c("grey25", "darkolivegreen3")) +
+  ggtitle("Survival Rate by Embarked data") +
+  ylab("Survival Rate") +
+  geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "white", lty = 2, lwd = 1) + 
+  annotate("text", x = 3, y = 0.5, label = "Overall\nSurvival\nRatio", colour='white')
+multiplot(embarked_bar, embarked_prop, layout=matrix(c(1,1,2,2,2),nrow = 1, ncol = 5, byrow=TRUE)) 
+
+```
+
+We have noticed previously that there are two missing values for the Embarked variable.
+
+```{r, message=FALSE, warning=FALSE}
+# Extract the passengers data which contains the missing Embarked data
+data.frame(filter(titanic, is.na(Embarked)))
+```
+
+We can see, that Southampton port is the most frequent port of embarkation but we have to take into account also fare (80) and passengers class (1) of these female passengers. 
+
+```{r, message=FALSE, warning=FALSE}
+titanic %>% 
+  filter(Pclass == 1 & !is.na(Embarked)) %>% 
+  ggplot(aes(x = Embarked, y = Fare, fill = Embarked)) + 
+    geom_boxplot() +
+    scale_fill_brewer() +
+    geom_hline(aes(yintercept = 80), colour = "red", lty = 2, size = 1) +
+    annotate("text", x = 2, y = 35, label = "Fare paid by\n2 female passengers\nwith missing embarked location", colour = "red") +
+    ggtitle("Fare distribution of first class passengers") 
+
+
+```
+
+From boxplot is obvious that Fare values about 80 is typical for Cherbourg port class 1 passengers, so We can assume, that these passengers embarked Cherbourg port.
+
+```{r, message=FALSE, warning=FALSE}
+# Imputation the missing Embarked value
+titanic$Embarked[which(is.na(titanic$Embarked))] <- "C"
+```
+
+### Passenger Title - engineered feature
+
+The passenger title (“Mrs”, “Master”, “Mr”, etc.) is part of Passenger’s name variable . Certain titles can be helpful for later missing age data imputation.
+
+```{r, message=FALSE, warning=FALSE}
+# Grabing passenger title from passenger name variable
+titanic$Title <- gsub("^.*, (.*?)\\..*$", "\\1", titanic$Name)
+
+# Title counts by sex
+table(titanic$Sex, titanic$Title)
+
+# Reassign some categories 
+titanic$Title[titanic$Title == 'Mlle' | titanic$Title == 'Ms'] <- 'Miss' 
+titanic$Title[titanic$Title == 'Mme']  <- 'Mrs' 
+titanic$Title[titanic$Title %in% c('Dona', 'Dr', 'Lady', 'the Countess','Capt', 'Col', 'Don', 'Jonkheer', 'Major', 'Rev', 'Sir')]  <- 'Other'
+
+# Let's see results
+titanic$Title <- factor(titanic$Title, levels = c("Miss", "Mrs", "Master", "Mr", "Other"))
+table(titanic$Sex, titanic$Title)
+
+title_bar <- ggplot(data = titanic, aes(x=Title, fill=Title)) +
+  geom_bar() +
+  coord_flip() +
+  scale_fill_brewer(palette = "Spectral") +
+  ggtitle("Title counts\nall passengers")
+title_prop <- ggplot(data = titanic[!is.na(titanic$Survived),],  aes(x=Title,  fill=Survived)) +
+  geom_bar(position="fill") +
+  scale_fill_manual(values= c("grey25", "darkolivegreen3")) +
+  ggtitle("Survival Rate by Title data") +
+  ylab("Survival Rate") +
+  geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "white", lty = 2, lwd = 1) + 
+  annotate("text", x = 4, y = 0.48, label = "Overall\nSurvival\nRatio", colour='white')
+multiplot(title_bar, title_prop) 
+```
+
+### Family size - engineered feature
+
+Using SigSp and Parch datacan be used to calculation Family Size variable as follows:
+
+```{r, message=FALSE, warning=FALSE}
+titanic$FamilySize <- 1 + titanic$SibSp + titanic$Parch
+table(titanic$FamilySize)
+
+
+family_bar <- ggplot(data = titanic, aes(x=FamilySize, fill=factor(FamilySize))) +
+  geom_bar() +
+  scale_x_continuous(breaks = c(1:8, 11)) +
+  theme(legend.position = "none") +
+  scale_fill_brewer(palette = "Spectral") +
+  xlab("Family size (members)") +
+  ggtitle("Family Size counts all passengers")
+family_prop <- ggplot(data = titanic[!is.na(titanic$Survived),],  aes(x=FamilySize,  fill=Survived)) +
+  geom_bar(position="fill") +
+  theme(legend.position = "bottom") +
+  scale_x_continuous(breaks = c(1:8, 11)) +
+  scale_fill_manual(values= c("grey25", "darkolivegreen3")) +
+  ggtitle("Survival Rate by Family Size") +
+  ylab("Survival Rate") +
+  xlab("Family size (members)") +
+  geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "white", lty = 2, lwd = 1) + 
+  annotate("text", x = 6.5, y = 0.6, label = "Overall Survival Ratio", colour='white')
+multiplot(family_bar, family_prop) 
+```
+
+It is obvious that some family size habe similar survival rates, so we can simplify these data by engineering new factor variable.
+
+```{r, message=FALSE, warning=FALSE}
+# Let's simplify data via category
+titanic$Fsize <- titanic$FamilySize %>% map_chr(function(x) ifelse(x == 1, "Single", ifelse(x> 7, "Extreme", ifelse(x> 4, "Large", "Small")))) %>% factor(levels = c("Single", "Small", "Large", "Extreme"), ordered = TRUE)
+table(titanic$Fsize)
+
+fsize_bar <- ggplot(data = titanic, aes(x=Fsize, fill=Fsize)) +
+  geom_bar() +
+  theme(legend.position = "none") +
+  scale_fill_brewer(palette = "Spectral") +
+  xlab("Family size") +
+  ggtitle("Family Size counts all passengers")
+fsize_prop <- ggplot(data = titanic[!is.na(titanic$Survived),],  aes(x=Fsize,  fill=Survived)) +
+  geom_bar(position="fill") +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values= c("grey25", "darkolivegreen3")) +
+  ggtitle("Survival Rate by Family Size") +
+  ylab("Survival Rate") +
+  xlab("Family size") +
+  geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "white", lty = 2, lwd = 1) + 
+  annotate("text", x = 3, y = 0.6, label = "Overall Survival Ratio", colour='white')
+multiplot(fsize_bar, fsize_prop) 
+```
+
+
+### Age
+
+```{r, message=FALSE, warning=FALSE}
+age_dens <- ggplot(titanic[!is.na(titanic$Age),], aes(Age)) +                
+  geom_density(fill="dodgerblue4", alpha=0.5) +
+  scale_x_continuous(breaks = seq(5,80,5)) +
+  ggtitle("Age distribution - all known passengers")
+
+age_hist <- ggplot(data = titanic[!is.na(titanic$Survived) & !is.na(titanic$Age),],  aes(x = Age,  fill = Survived)) +
+  geom_histogram(position = "fill", binwidth = 5) +
+  scale_fill_manual(values = c("grey25", "darkolivegreen3")) +
+  scale_x_continuous(breaks = seq(5,80,5)) +
+  ggtitle("Survival Rate by Age - all known passengers") +
+  ylab("Survival Rate") +
+  theme(legend.position = "bottom") +
+  geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "white", lty = 2, lwd = 1) +
+  annotate("text", x = 40, y = 0.55, label = "Overall Survival Ratio", colour='white')
+multiplot(age_dens, age_hist, layout=matrix(c(1,2,2),nrow = 3, ncol = 1, byrow=TRUE)) 
+```
+ 
+
+Now we can have a look if this survival rate versis age data is biased, for example known age data is more abundant in survived passengers.
+
+```{r, message=FALSE, warning=FALSE} 
+# Engineered new variable - known/unknown Age data
+titanic$age_known <- factor(ifelse(is.na(titanic$Age), "unknown", "known"))
+
+table(titanic$age_known)
+
+ggplot(titanic[!is.na(titanic$Survived),], aes(x = age_known, fill = Survived)) +                
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = c("grey25", "darkolivegreen3")) +
+  geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "white", lty = 2, lwd = 1) +
+  annotate("text", x = 1, y = 0.55, label = "Overall Survival Ratio", colour='white')
+```
+ 
+It is aparent that survival ratio for passengers with known Age data is close to overall survival rate. That is primarily due to high proportion of known Age data. We can conclude that presented Age distribution histogram is relatively representative, histogram with all Age data will be very similar, survival rates for different age intervals will be only insignificantly lower due to higher propoertion of unsurvived passengers.
+ 
+   
+We have noticed that there are many missing values for the Age variable.          
+```{r, message=FALSE, warning=FALSE} 
+# Imputation missing data
+mice_age <- mice.impute.rf(titanic$Age, !is.na(titanic$Age), titanic[, c("Title","Pclass", "Sex", "SibSp", "Parch", "Fare", "Embarked")]) 
+
+titanic$Age[is.na(titanic$Age)] <- mice_age
+
+
+ggplot(titanic, aes(x = Age, fill = age_known)) +                
+  geom_histogram(position="identity", alpha=0.6) +
+  scale_x_continuous(breaks = seq(5,80,5)) +
+  labs(fill ="Age") +
+  theme(legend.position = c(0.85, 0.8)) +
+  ggtitle("Age distribution - (un)known passengers")
+
+```
+
+4 Prediction
+At last we’re ready to predict who survives among passengers of the Titanic based on variables that we carefully curated and treated for missing values. For this, we will rely on the randomForest classification algorithm; we spent all that time on imputation, after all.
+
+4.1 Split into training & test sets
+Our first step is to split the data back into the original test and training sets.
+
+# Split the data back into a train set and a test set
+train_new <- titanic[1:891,]
+test_new <- titanic[892:1309,]
+
+4.2 Building the model
+We then build our model using randomForest on the training set.
+
+# Set a random seed
+set.seed(754)
+
+# Build the model (note: not all possible variables are used)
+rf_model <- randomForest(factor(Survived) ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked + Title + FamilySize, data = train_new)
+
+# Show model error
+plot(rf_model, ylim=c(0,0.36))
+legend('topright', colnames(rf_model$err.rate), col=1:3, fill=1:3)
+
+Variable importance
+Let’s look at relative variable importance by plotting the mean decrease in Gini calculated across all trees.
+
+4.4 Prediction!
+We’re ready for the final step — making our prediction! When we finish here, we could iterate through the preceding steps making tweaks as we go or fit the data using different models or use different combinations of variables to achieve better predictions. But this is a good starting (and stopping) point for me now.
+
+# Predict using the test set
+prediction <- predict(rf_model, test_new)
+
+# Save the solution to a dataframe with two columns: PassengerId and Survived (prediction)
+solution <- data.frame(PassengerID = test$PassengerId, Survived = prediction)
+
+# Write the solution to file
+write.csv(solution, file = 'TB_solution.csv', row.names = FALSE)
+
